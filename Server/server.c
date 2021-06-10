@@ -7,14 +7,10 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <pthread.h>
-#include <sys/unistd.h>
-#include "utility.h"
 #include "server.h"
-#include <stdio.h>
+#include "http_response_errors.h"
 #include <unistd.h>
 #include <stdlib.h>
-#include <string.h>
-#include <netdb.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -23,15 +19,14 @@
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <unistd.h>
 #include <sys/errno.h>
+#include <ctype.h>
 
-const char* SERVER_PORT = "8084";
+const char *SERVER_PORT = "8085";
 
 atomic_bool stop_socket_thread = false;
 
 #define BUFSIZE 1024
-#define MAXERRS 16
 
 extern char **environ; /* the environment */
 
@@ -46,33 +41,19 @@ void error(char *msg) {
 /*
  * cerror - returns an error message to the client
  */
-void cerror(FILE *stream, char *cause, char *errno,
-            char *shortmsg, char *longmsg) {
-    fprintf(stream, "HTTP/1.1 %s %s\n", errno, shortmsg);
-    fprintf(stream, "Content-type: text/html\n");
-    fprintf(stream, "\n");
-    fprintf(stream, "<html><title>Tiny Error</title>");
-    fprintf(stream, "<body bgcolor=""ffffff"">\n");
-    fprintf(stream, "%s: %s\n", errno, shortmsg);
-    fprintf(stream, "<p>%s: %s\n", longmsg, cause);
-    fprintf(stream, "<hr><em>The Tiny Web server</em>\n");
+void cerror(int client) {
+    send(client, not_found_response, strlen(not_found_response), 0);
 }
 
 void *start_server(void *data) {
 
     /* variables for connection management */
     int parentfd;          /* parent socket */
-    int childfd;           /* child socket */
     int portno;            /* port to listen on */
-    int clientlen;         /* byte size of client's address */
-    struct hostent *hostp; /* client host info */
-    char *hostaddrp;       /* dotted decimal host addr string */
-    int optval;            /* flag value for setsockopt */
     struct sockaddr_in serveraddr; /* server's addr */
     struct sockaddr_in clientaddr; /* client addr */
 
     /* variables for connection I/O */
-    FILE *stream;          /* stream version of childfd */
     char buf[BUFSIZE];     /* message buffer */
     char method[BUFSIZE];  /* request method */
     char uri[BUFSIZE];     /* request uri */
@@ -95,6 +76,7 @@ void *start_server(void *data) {
         error("ERROR opening socket");
         return 0;
     }
+    printf("[OK]: Socket started successfully \n");
 
     /* bind port to socket */
     bzero((char *) &serveraddr, sizeof(serveraddr));
@@ -104,66 +86,51 @@ void *start_server(void *data) {
     if (bind(parentfd, (struct sockaddr *) &serveraddr,
              sizeof(serveraddr)) < 0)
         error("ERROR on binding");
+    printf("[OK]: Successfully binded \n");
 
     /* get us ready to accept connection requests */
     if (listen(parentfd, 5) < 0) /* allow 5 requests to queue up */
         error("ERROR on listen");
 
+
+    printf("[INFO]: Try to open 'http://127.0.0.1:%s' in your browser\n", SERVER_PORT);
     /*
      * main loop: wait for a connection request, parse HTTP,
      * serve requested content, close connection.
      */
-    clientlen = sizeof(clientaddr);
     while (1) {
+        if (stop_socket_thread) {
+            printf("Stop server");
+            return 0;
+        }
 
-        /* wait for a connection request */
-        childfd = accept(parentfd, (struct sockaddr *) &clientaddr, &clientlen);
-        if (childfd < 0)
-            error("ERROR on accept");
+        int client_socket_fd;
+        int client_address_len;
 
-        /* determine who sent the message */
-        hostp = gethostbyaddr((const char *) &clientaddr.sin_addr.s_addr,
-                              sizeof(clientaddr.sin_addr.s_addr), AF_INET);
-        if (hostp == NULL)
-            error("ERROR on gethostbyaddr");
-        hostaddrp = inet_ntoa(clientaddr.sin_addr);
-        if (hostaddrp == NULL)
-            error("ERROR on inet_ntoa\n");
+        client_address_len = sizeof(clientaddr);
 
-        /* open the child socket descriptor as a stream */
-        if ((stream = fdopen(childfd, "r+")) == NULL)
+        /* open the child socket descriptor*/
+        if ((client_socket_fd = accept(parentfd, (struct sockaddr *) &clientaddr, &client_address_len)) < 0)
             error("ERROR on fdopen");
 
         /* get the HTTP request line */
-        fgets(buf, BUFSIZE, stream);
-        printf("%s", buf);
+        read(client_socket_fd, buf, BUFSIZE);
+        //printf("%s", buf);
         sscanf(buf, "%s %s %s\n", method, uri, version);
+        printf("%s %s", uri);
+
 
         /* tiny only supports the GET method */
         if (strcasecmp(method, "GET")) {
-            cerror(stream, method, "501", "Not Implemented",
-                   "Tiny does not implement this method");
-            fclose(stream);
-            close(childfd);
+            cerror(client_socket_fd);
+            close(client_socket_fd);
             continue;
-        }
-
-        /* read (and ignore) the HTTP headers */
-        fgets(buf, BUFSIZE, stream);
-        printf("%s", buf);
-        while (strcmp(buf, "\r\n")) {
-            fgets(buf, BUFSIZE, stream);
-            printf("%s", buf);
         }
 
         /* parse the uri [crufty] */
         if (!strstr(uri, "cgi-bin")) { /* static content */
-            is_static = 1;
-            strcpy(cgiargs, "");
-            strcpy(filename, ".");
-            strcat(filename, uri);
-            if (uri[strlen(uri) - 1] == '/')
-                strcat(filename, "index.html");
+            cerror("Start from cgi-bin?name_cgi_script");
+            continue;
         } else { /* dynamic content */
             is_static = 0;
             p = index(uri, '?');
@@ -175,86 +142,54 @@ void *start_server(void *data) {
             }
             strcpy(filename, ".");
             strcat(filename, uri);
+            printf("%s", filename);
         }
 
         /* make sure the file exists */
         if (stat(filename, &sbuf) < 0) {
-            cerror(stream, filename, "404", "Not found",
-                   "Tiny couldn't find this file");
-            fclose(stream);
-            close(childfd);
+            cerror(client_socket_fd);
+            close(client_socket_fd);
             continue;
         }
 
-        /* serve static content */
-        if (is_static) {
-            if (strstr(filename, ".html"))
-                strcpy(filetype, "text/html");
-            else if (strstr(filename, ".gif"))
-                strcpy(filetype, "image/gif");
-            else if (strstr(filename, ".jpg"))
-                strcpy(filetype, "image/jpg");
-            else
-                strcpy(filetype, "text/plain");
+        /* a real server would set other CGI environ vars as well*/
+        setenv("QUERY_STRING", cgiargs, 1);
+        setenv("REQUEST_METHOD", method, 1);
 
-            /* print response header */
-            fprintf(stream, "HTTP/1.1 200 OK\n");
-            fprintf(stream, "Server: Tiny Web Server\n");
-            fprintf(stream, "Content-length: %d\n", (int) sbuf.st_size);
-            fprintf(stream, "Content-type: %s\n", filetype);
-            fprintf(stream, "\r\n");
-            fflush(stream);
+        /* print first part of response header */
+        sprintf(buf, "HTTP/1.1 200 OK\n");
 
-            /* Use mmap to return arbitrary-sized response body */
-            fd = open(filename, O_RDONLY);
-            p = mmap(0, sbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-            fwrite(p, 1, sbuf.st_size, stream);
-            munmap(p, sbuf.st_size);
+        send(client_socket_fd, buf, strlen(buf), 0);
+        sprintf(buf, "Content-Type: text/html; charset=utf-8\r\n");
+        send(client_socket_fd, buf, strlen(buf), 0);
+        sprintf(buf, "Server: Tiny Web Server\n");
+        send(client_socket_fd, buf, strlen(buf), 0);
+
+        /* create and run the child CGI process so that all child
+           output to stdout and stderr goes back to the client via the
+           childfd socket descriptor */
+
+        pid = fork();
+        if (pid < 0) {
+            perror("ERROR in fork");
+            exit(1);
+        } else if (pid > 0) { /* parent process */
+            wait(&wait_status);
+        } else { /* child  process*/
+            dup2(client_socket_fd, 1); /* map socket to stdout */
+            dup2(client_socket_fd, 2); /* map socket to stderr */
+
+            char *arg[] = {"/bin/sh", filename, (char *) 0};
+            if (execve("/bin/sh", arg, environ) < 0) {
+                perror("ERROR in execve");
+            }
+            close(0); /* close stdin */
+
         }
 
-            /* serve dynamic content */
-        else {
-            /* make sure file is a regular executable file */
-            if (!(S_IFREG & sbuf.st_mode) || !(S_IXUSR & sbuf.st_mode)) {
-                cerror(stream, filename, "403", "Forbidden",
-                       "You are not allow to access this item");
-                fclose(stream);
-                close(childfd);
-                continue;
-            }
-
-            /* a real server would set other CGI environ vars as well*/
-            setenv("QUERY_STRING", cgiargs, 1);
-
-            /* print first part of response header */
-            sprintf(buf, "HTTP/1.1 200 OK\n");
-            write(childfd, buf, strlen(buf));
-            sprintf(buf, "Server: Tiny Web Server\n");
-            write(childfd, buf, strlen(buf));
-
-            /* create and run the child CGI process so that all child
-               output to stdout and stderr goes back to the client via the
-               childfd socket descriptor */
-            pid = fork();
-            if (pid < 0) {
-                perror("ERROR in fork");
-                exit(1);
-            } else if (pid > 0) { /* parent process */
-                wait(&wait_status);
-            } else { /* child  process*/
-                close(0); /* close stdin */
-                dup2(childfd, 1); /* map socket to stdout */
-                dup2(childfd, 2); /* map socket to stderr */
-                if (execve(filename, NULL, environ) < 0) {
-                    perror("ERROR in execve");
-                }
-            }
-        }
 
         /* clean up */
-        fclose(stream);
-        close(childfd);
-
+        close(client_socket_fd);
     }
 }
 

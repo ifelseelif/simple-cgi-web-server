@@ -4,7 +4,7 @@
 
 #include "http_response_errors.h"
 
-static const char * not_found_response =
+static const char not_found_response[300] =
         "HTTP/1.1 404 Not Found\r\n"
         "Content-Length: 111\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
@@ -18,7 +18,7 @@ static const char * not_found_response =
         "</body>\n"
         "</html>\n";
 
-static const char * forbidden_response =
+static const char forbidden_response[300] =
         "HTTP/1.1 403 Forbidden\r\n"
         "Content-Length: 114\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
