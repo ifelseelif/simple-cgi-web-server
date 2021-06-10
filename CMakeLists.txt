@@ -1,0 +1,6 @@
+# cmake_minimum_required(VERSION <specify CMake version here>)
+project(lab3 C)
+
+set(CMAKE_C_STANDARD 11)
+
+add_executable(lab3 main.c Server/server.c Server/server.h Client/client.c Client/client.h Server/http_response_errors.c Server/http_response_errors.h Server/utility.c Server/utility.h)
