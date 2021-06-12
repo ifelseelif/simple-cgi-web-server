@@ -5,4 +5,4 @@ set(CMAKE_C_STANDARD 11)
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread")
 
-add_executable(lab3 main.c Server/server.c Server/server.h Client/client.c Client/client.h Server/http_response_errors.c Server/http_response_errors.h)
+add_executable(lab3 main.c Server/server.c Server/server.h Client/client.c Client/client.h)

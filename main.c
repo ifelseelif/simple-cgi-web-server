@@ -4,22 +4,22 @@
 #include "Client/client.h"
 
 int main(int argc, char *argv[]) {
-    printf("Добрый день\n");
-    printf("Идет проверка аргументов\n");
+    printf("Goo morning\n");
+    printf("Checking arguments...\n");
 
     if(argc < 2){
-        printf("Недостаточно аргументов");
+        printf("Not enough arguments");
         return 0;
     }
 
     if(strcmp(argv[1],"server") == 0){
-        printf("Запускаюсь, как сервер\n");
+        printf("Start as server\n");
         execute_server();
     }else{
-        printf("Запускаюсь, как клиент\n");
+        printf("Start as client\n");
         execute_client();
     }
 
-    printf("До свидания\n");
+    printf("Bye\n");
     return 0;
 }
