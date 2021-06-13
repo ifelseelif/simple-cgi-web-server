@@ -12,9 +12,14 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    if(strcmp(argv[1],"server") == 0){
+    if(strcmp(argv[1],"server") == 0 && argc ){
         printf("Start as server\n");
-        execute_server();
+        if(argc < 3){
+            printf("Not enough arguments for server");
+            return 0;
+        }
+
+        execute_server(argv[2]);
     }else{
         printf("Start as client\n");
         execute_client();

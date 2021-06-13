@@ -1,2 +1,13 @@
-POST http://127.0.0.1:8084/cgi-bin/index.sh
+POST http://127.0.0.1:8085/cgi-bin/index.sh
+Content-Type: application/json
+
+{}
+
+###
+POST http://127.0.0.1:8085/cgi-bin/index.sh
+Content-Type: application/json
+
+{
+"a": 1
+}
 ###

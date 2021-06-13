@@ -1,6 +1,8 @@
 //
 // Created by Артём on 07.06.2021.
 //
+
+
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -8,6 +10,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include "server.h"
+#include "config_worker.h"
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -16,24 +19,25 @@
 #include <sys/wait.h>
 #include <netinet/in.h>
 #include <fcntl.h>
+#include <regex.h>
 
-const char *SERVER_PORT = "8084";
+#define BUFSIZE 1024
+const char *SERVER_PORT = "8085";
+char *config_file = "server_config.ini";
 
 atomic_bool stop_socket_thread = false;
 
-#define BUFSIZE 1024
-
 extern char **environ; /* the environment */
 
-int parseUri(char filename[1024], char uri[1024], char cgiargs[1024]);
-
-char *detect_mime_type_for_filename(char *filename);
+int parseUri(int client_socket_fd, char filename[1024], char uri[1024], char cgiargs[1024]);
 
 void response_static_file(int client_socket_fd, char filename[BUFSIZE], off_t size_file);
 
 int check_file(int client_socket_fd, char filename[1024], struct stat *sbuf);
 
-void *start_server(void *data);
+void *check_stop_server(void *data);
+
+char *getExt(int client_socket_fd, const char *file_name);
 
 /*
  * error - wrapper for perror used for bad syscalls
@@ -63,10 +67,13 @@ void cerror(int client_socket_fd, char *cause, char *errno,
     close(client_socket_fd);
 }
 
-void execute_server() {
+void execute_server(char *work_dir) {
+    start_work_with_config_file(work_dir, config_file);
+
     // handle stop server on 'c' input in another thread
     pthread_t thread;
-    pthread_create(&thread, NULL, start_server, NULL);
+    pthread_create(&thread, NULL, check_stop_server, NULL);
+
 
     /* variables for connection management */
     int parent_fd;          /* parent socket */
@@ -85,6 +92,7 @@ void execute_server() {
     struct stat sbuf;      /* file status */
     int pid;               /* process id from fork */
     int wait_status;       /* status from wait */
+
 
     port_number = atoi(SERVER_PORT);
 
@@ -118,7 +126,7 @@ void execute_server() {
      * serve requested content, close connection.
      */
     while (1) {
-        memset(&buf, '\000',BUFSIZE);
+        memset(&buf, 0, BUFSIZE);
         if (stop_socket_thread) {
             printf("[OK]: Stop server \n");
             exit(1);
@@ -134,20 +142,19 @@ void execute_server() {
 
         /* get the HTTP request line */
         recv(client_socket_fd, buf, BUFSIZE, 0);
+        FILE *log_file = fopen("./log.txt", "w");
+        fprintf(log_file, "%s\n\n", buf);
+        fclose(log_file);
         sscanf(buf, "%s %s %s\n", method, uri, version);
         char *q = strstr(buf, "Content-Length:");
-        unsigned int content_length = 0;
         char *body;
         if (q != NULL) {
-            content_length = strtoul(q + 15, NULL, 10);
             body = strstr(q, "\r\n\r\n") + 4;
-            if(body == NULL){
-                body = "    ";
-            }
+            q = NULL;
         }
 
         /* parse the uri */
-        is_static = parseUri(filename, uri, cgi_args);
+        is_static = parseUri(client_socket_fd, filename, uri, cgi_args);
 
         /* make sure the file exists */
         if (check_file(client_socket_fd, filename, &sbuf) < 0) {
@@ -155,16 +162,19 @@ void execute_server() {
         }
 
         /* serve static content */
-        if (is_static)
-        {
+        if (is_static) {
             response_static_file(client_socket_fd, filename, sbuf.st_size);
-        }
-        else
-        {
+        } else {
             /* a real server would set other CGI environ vars as well*/
             setenv("QUERY_STRING", cgi_args, 1);
             setenv("REQUEST_METHOD", method, 1);
-            setenv("BODY", body, 1);
+            setenv("SCRIPT_FILENAME", filename, 1);
+            if (body != NULL) {
+                setenv("BODY", body, 1);
+                body = NULL;
+            } else {
+                setenv("BODY", "", 1);
+            }
 
             /* print first part of response header */
             sprintf(buf, "HTTP/1.1 200 OK\n");
@@ -178,6 +188,7 @@ void execute_server() {
                output to stdout and stderr goes back to the client via the
                client_socket_fd */
             pid = fork();
+            //pid = 0;
             if (pid < 0) {
                 perror("ERROR in fork");
                 exit(1);
@@ -188,9 +199,16 @@ void execute_server() {
                 dup2(client_socket_fd, 1); /* map socket to stdout */
                 dup2(client_socket_fd, 2); /* map socket to stderr */
 
-                //TODO change interpreter
-                char *arg[] = {"/bin/sh", filename, (char *) 0};
-                if (execve("/bin/sh", arg, environ) < 0) {
+                char *value = get_value(getExt(client_socket_fd, filename));
+                if (value == NULL) {
+                    cerror(client_socket_fd, filename, "500", "Can't execute for this cgi",
+                           "Can't execute");
+                    continue;
+                }
+                char *f = filename;
+                printf("%s", f);
+                char *arg[] = {value, filename, (char *) 0};
+                if (execve(value, arg, environ) < 0) {
                     perror("ERROR in execve");
                 }
 
@@ -199,6 +217,14 @@ void execute_server() {
         printf("Sent %s %ld \n", filename, sbuf.st_size);
         close(client_socket_fd);
     }
+}
+
+char *getExt(int client_socket_fd, const char *file_name) {
+    char *e = strrchr(file_name, '.');
+    if (e == NULL) {
+        cerror(client_socket_fd, "500", "Oops...smth went wrong", "Try late", "Oops...smth went wrong");
+    }
+    return e;
 }
 
 int check_file(int client_socket_fd, char filename[1024], struct stat *sbuf) {
@@ -214,7 +240,20 @@ int check_file(int client_socket_fd, char filename[1024], struct stat *sbuf) {
     return 1;
 }
 
-int parseUri(char filename[1024], char uri[1024], char cgiargs[1024]) {
+int parseUri(int client_socket_fd, char filename[1024], char uri[1024], char cgiargs[1024]) {
+    char *filter = get_value("filter");
+    if (filter != NULL) {
+        regex_t regex;
+        int return_value;
+        return_value = regcomp(&regex, filter, 0);
+        if (return_value == 0) {
+            return_value = regexec(&regex, uri, 0, NULL, 0);
+            if (return_value == 0) {
+                cerror(client_socket_fd, "403", "Forbidden", "Forbidden", "Not enough permission");
+            }
+        }
+    }
+
     if (!strstr(uri, "cgi-bin")) { /* static content */
         strcpy(cgiargs, "");
         strcpy(filename, "./static");
@@ -246,8 +285,11 @@ void response_static_file(int client_socket_fd, char filename[BUFSIZE], off_t si
     stream = fdopen(client_socket_fd, "rb+");
 
     /* parse mime type */
-    //TODO conditional response mime type
-    char *mime_type = detect_mime_type_for_filename(filename);
+    char *ext = getExt(client_socket_fd, filename);
+    char *mime_type = get_value(ext+1);
+    if (mime_type == NULL) {
+        mime_type = "text/plain";
+    }
 
     /* print response header */
     sprintf(buf, "HTTP/1.1 200 OK\n");
@@ -266,19 +308,7 @@ void response_static_file(int client_socket_fd, char filename[BUFSIZE], off_t si
     close(client_socket_fd);
 }
 
-char *detect_mime_type_for_filename(char *filename) {
-    if (strstr(filename, ".html"))
-        return "text/html";
-    if (strstr(filename, ".ico"))
-        return "image/x-icon";
-    if (strstr(filename, ".php"))
-        return "text/php";
-    if (strstr(filename, ".sh"))
-        return "text/x-shellscript";
-    return "text/plain";
-}
-
-void *start_server(void *data) {
+void *check_stop_server(void *data) {
     while (1) {
         if (getchar() == (int) 'c') {
             stop_socket_thread = true;
