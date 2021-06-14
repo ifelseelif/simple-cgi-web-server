@@ -154,6 +154,7 @@ void execute_server(char *work_dir) {
         }
 
         /* parse the uri */
+        strcpy(filename, work_dir);
         is_static = parseUri(client_socket_fd, filename, uri, cgi_args);
 
         /* make sure the file exists */
@@ -214,7 +215,7 @@ void execute_server(char *work_dir) {
 
             }
         }
-        printf("Sent %s %ld \n", filename, sbuf.st_size);
+        printf("Sent %s %ld bytes\n", filename, sbuf.st_size);
         close(client_socket_fd);
     }
 }
@@ -256,8 +257,7 @@ int parseUri(int client_socket_fd, char filename[1024], char uri[1024], char cgi
 
     if (!strstr(uri, "cgi-bin")) { /* static content */
         strcpy(cgiargs, "");
-        strcpy(filename, "./static");
-        strcat(filename, uri);
+        strcat(filename, strstr(uri, "/") + 1);
         if (uri[strlen(uri) - 1] == '/')
             strcat(filename, "index.html");
         return 1;
@@ -270,7 +270,6 @@ int parseUri(int client_socket_fd, char filename[1024], char uri[1024], char cgi
         } else {
             strcpy(cgiargs, "");
         }
-        strcpy(filename, ".");
         strcat(filename, uri);
         return 0;
     }
@@ -286,7 +285,7 @@ void response_static_file(int client_socket_fd, char filename[BUFSIZE], off_t si
 
     /* parse mime type */
     char *ext = getExt(client_socket_fd, filename);
-    char *mime_type = get_value(ext+1);
+    char *mime_type = get_value(ext + 1);
     if (mime_type == NULL) {
         mime_type = "text/plain";
     }
@@ -304,8 +303,8 @@ void response_static_file(int client_socket_fd, char filename[BUFSIZE], off_t si
     p = mmap(0, size_file, PROT_READ, MAP_PRIVATE, fd, 0);
     fwrite(p, 1, size_file, stream);
     munmap(p, size_file);
+    close(fd);
     fclose(stream);
-    close(client_socket_fd);
 }
 
 void *check_stop_server(void *data) {

@@ -22,7 +22,7 @@ int main(int argc, char *argv[]) {
         execute_server(argv[2]);
     }else{
         printf("Start as client\n");
-        execute_client();
+        execute_client(argc, argv);
     }
 
     printf("Bye\n");
