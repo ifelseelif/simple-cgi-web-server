@@ -229,9 +229,6 @@ char *getExt(int client_socket_fd, const char *file_name) {
 }
 
 int check_file(int client_socket_fd, char filename[1024], struct stat *sbuf) {
-    if (strstr(filename, "favicon.ico")) {
-        return 1;
-    }
     if (stat(filename, sbuf) < 0) {
         cerror(client_socket_fd, filename, "404", "Not found",
                "Server couldn't find this file");
