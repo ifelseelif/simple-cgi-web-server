@@ -22,7 +22,7 @@
 #include <regex.h>
 
 #define BUFSIZE 1024
-const char *SERVER_PORT = "8085";
+const char *SERVER_PORT = "8084";
 char *config_file = "server_config.ini";
 
 atomic_bool stop_socket_thread = false;
@@ -143,7 +143,6 @@ void execute_server(char *work_dir) {
         /* get the HTTP request line */
         recv(client_socket_fd, buf, BUFSIZE, 0);
         FILE *log_file = fopen("./log.txt", "w");
-        fprintf(log_file, "%s\n\n", buf);
         fclose(log_file);
         sscanf(buf, "%s %s %s\n", method, uri, version);
         char *q = strstr(buf, "Content-Length:");
@@ -178,7 +177,7 @@ void execute_server(char *work_dir) {
             }
 
             /* print first part of response header */
-            sprintf(buf, "HTTP/1.1 200 OK\n");
+            sprintf(buf, "HTTP/1.1 200 Ok\r\n");
             send(client_socket_fd, buf, strlen(buf), 0);
             sprintf(buf, "Content-Type: text/html; charset=utf-8\r\n");
             send(client_socket_fd, buf, strlen(buf), 0);
@@ -274,34 +273,41 @@ int parseUri(int client_socket_fd, char filename[1024], char uri[1024], char cgi
 
 void response_static_file(int client_socket_fd, char filename[BUFSIZE], off_t size_file) {
     int fd;                /* static content filedes */
-    FILE *stream;          /* client socket descriptor */
     char buf[BUFSIZE];     /* message buffer */
-    char *p;/* temporary pointer */
-
-    stream = fdopen(client_socket_fd, "rb+");
 
     /* parse mime type */
     char *ext = getExt(client_socket_fd, filename);
     char *mime_type = get_value(ext + 1);
     if (mime_type == NULL) {
-        mime_type = "text/plain";
+        mime_type = "text/plain; charset=utf-8";
     }
 
     /* print response header */
-    sprintf(buf, "HTTP/1.1 200 OK\n");
-    sprintf(buf, "Server: Tiny Web Server\n");
-    sprintf(buf, "Content-length: %ld\n", size_file);
-    sprintf(buf, "Content-type: %s; charset=utf-8;\r\n", mime_type);
-    sprintf(buf, "\r\n");
+    sprintf(buf, "HTTP/1.1 200 OK\r\n");
+    strcat(buf, "Host: 127.0.0.1\r\n");
+    char *new = malloc(128);
+    strcat(buf, "Server: Tiny Web Server\r\n");
+    sprintf(new, "Content-length: %ld\r\n", size_file);
+    strcat(buf, new);
+    sprintf(new, "Content-type: %s\r\n\r\n", mime_type);
+    strcat(buf, new);
     send(client_socket_fd, buf, strlen(buf), 0);
 
     /* Use mmap to return arbitrary-sized response body */
     fd = open(filename, O_RDONLY);
-    p = mmap(0, size_file, PROT_READ, MAP_PRIVATE, fd, 0);
-    fwrite(p, 1, size_file, stream);
-    munmap(p, size_file);
+    ssize_t offset = 0;
+    ssize_t rbytes = 0;
+    while (1) {
+        rbytes = pread(fd, buf, BUFSIZE, offset);
+        if (rbytes <= 0) {
+            break;
+        }
+        send(client_socket_fd, buf, rbytes, 0);
+        offset += rbytes;
+    }
+
     close(fd);
-    fclose(stream);
+    close(client_socket_fd);
 }
 
 void *check_stop_server(void *data) {
